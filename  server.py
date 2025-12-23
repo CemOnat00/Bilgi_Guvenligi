@@ -1,6 +1,7 @@
 import socket
 import threading
 import json  # YENİ: Veri paketleme kütüphanesi
+from PIL import Image
 
 HOST = '127.0.0.1'
 PORT = 12345
@@ -13,6 +14,39 @@ PORT = 12345
 # }
 users = {} 
 
+def extract_msg(image_path):
+    """
+    Sunucuya gelen resim dosyasının yolunu (path) alır,
+    içine gizlenmiş metni (parolayı) okur ve geri döndürür.
+    """
+    img = Image.open(image_path)
+    
+    # Resimdeki pikselleri tek tek gezen bir iteratör oluştur
+    img_data = iter(img.getdata())
+
+    data = ""
+    
+    while True:
+        # Pikselleri 3'er 3'er oku (R, G, B değerleri)
+        pixels = [value for value in next(img_data)[:3] +
+                                next(img_data)[:3] +
+                                next(img_data)[:3]]
+
+        # Piksellerin son bitlerini birleştirip harfe çevir
+        binstr = ''
+        for i in pixels[:8]:
+            if (i % 2 == 0):
+                binstr += '0'
+            else:
+                binstr += '1'
+
+        data += chr(int(binstr, 2))
+        
+        # Eğer okunan verinin son 5 karakteri '#####' ise mesaj bitmiş demektir.
+        # (B Kişisi mesajın sonuna işaret olarak ##### koymalı)
+        if data[-5:] == "#####":
+            return data[:-5] # İşaret kısmını at ve şifreyi dön
+        
 def broadcast(message, sender_name="Sistem"):
     """Herkese mesaj yayar"""
     for user_name, user_info in users.items():
