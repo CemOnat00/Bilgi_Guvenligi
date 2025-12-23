@@ -25,7 +25,7 @@ Geliştirme Süreci ve İş Birliği
 Proje, siber güvenlik ve ağ yönetimi prensiplerine uygun olarak kolektif bir çalışma düzeni ile yürütülmektedir. Geliştirme sürecinde versiyon kontrol sistemi olarak GitHub kullanılmakta olup, değişiklikler eş zamanlı olarak takip edilmektedir.
 Katkıda Bulunanlar
 
-    Cem Onat Satır (github.com/CemOnat00) -
+    Cem Onat Satır (github.com/CemOnat00) 
 
     Yakup Eren Arabul (github.com/ErenSbr) 
 
