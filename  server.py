@@ -10,7 +10,6 @@ PORT = 12345
 # Yapı şöyle olacak:
 # users = {
 #    "Cem": { "socket": <baglanti_objesi>, "status": "online" },
-#    "Asude": { "socket": <baglanti_objesi>, "status": "online" }
 # }
 users = {} 
 
