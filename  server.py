@@ -40,11 +40,11 @@ def extract_msg(image_path):
                 binstr += '1'
 
         data += chr(int(binstr, 2))
-        
-        # Eğer okunan verinin son 5 karakteri '#####' ise mesaj bitmiş demektir.
-        # (B Kişisi mesajın sonuna işaret olarak ##### koymalı)
-        if data[-5:] == "#####":
-            return data[:-5] # İşaret kısmını at ve şifreyi dön
+
+        # Eğer okunan verinin son 3 karakteri '$$$' ise mesaj bitmiş demektir.
+        # (B Kişisi mesajın sonuna işaret olarak $$$ koymalı)
+        if data[-3:] == "$$$":
+            return data[:-3] # İşaret kısmını at ve şifreyi dön
         
 def broadcast(message, sender_name="Sistem"):
     """Herkese mesaj yayar"""
