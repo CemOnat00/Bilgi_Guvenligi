@@ -2,168 +2,237 @@ import socket
 import threading
 import json
 import os
-import steg  # Steganografi işlemleri için
-from dess import DESCipher  # DES şifreleme sınıfı için
+import steg
+from dess import DESCipher
 from PIL import Image
+import base64
+import time
 
 HOST = '127.0.0.1'
 PORT = 12345
 
-# KULLANICI REHBERİ (DATABASE)
-# Yapı şöyle olacak:
-# users = {
-#    "Cem": { "socket": <baglanti_objesi>, "status": "online" },
-# }
-users = {} 
+online_users = {}
+DB_FILE = "users_db.json"
+OFFLINE_FILE = "offline_messages.json"
 
-def extract_msg(image_path):
-    """
-    Sunucuya gelen resim dosyasının yolunu (path) alır,
-    içine gizlenmiş metni (parolayı) okur ve geri döndürür.
-    """
-    img = Image.open(image_path)
-    
-    # Resimdeki pikselleri tek tek gezen bir iteratör oluştur
-    img_data = iter(img.getdata())
 
-    data = ""
-    
-    while True:
-        # Pikselleri 3'er 3'er oku (R, G, B değerleri)
-        pixels = [value for value in next(img_data)[:3] +
-                                next(img_data)[:3] +
-                                next(img_data)[:3]]
+# --- EKRAN SÜSLEME FONKSİYONLARI ---
+def print_header(title):
+    print("\n" + "=" * 50)
+    print(f" {title}".center(50))
+    print("=" * 50)
+def print_step(step, msg):
+    print(f"[*] {step}: {msg}")
+def print_crypto(action, data):
+    print(f"    >>> {action}: {data}")
+# --- STANDART FONKSİYONLAR ---
+def load_db():
+    if not os.path.exists(DB_FILE): return {}
+    try:
+        with open(DB_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return {}
+def save_db(db):
+    with open(DB_FILE, 'w') as f: json.dump(db, f)
 
-        # Piksellerin son bitlerini birleştirip harfe çevir
-        binstr = ''
-        for i in pixels[:8]:
-            if (i % 2 == 0):
-                binstr += '0'
-            else:
-                binstr += '1'
 
-        data += chr(int(binstr, 2))
+def load_offline_msgs():
+    if not os.path.exists(OFFLINE_FILE): return {}
+    try:
+        with open(OFFLINE_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return {}
 
-        # Eğer okunan verinin son 3 karakteri '$$$' ise mesaj bitmiş demektir.
-        # (B Kişisi mesajın sonuna işaret olarak $$$ koymalı)
-        if data[-3:] == "$$$":
-            return data[:-3] # İşaret kısmını at ve şifreyi dön
-        
-def broadcast(message, sender_name="Sistem"):
-    """Herkese mesaj yayar"""
-    for user_name, user_info in users.items():
+
+def save_offline_msgs(msgs):
+    with open(OFFLINE_FILE, 'w') as f: json.dump(msgs, f)
+
+
+def broadcast_user_list():
+    db = load_db()
+    user_list_data = []
+    for u_name in db.keys():
+        durum = "Online" if u_name in online_users else "Offline"
+        user_list_data.append({"username": u_name, "status": durum})
+
+    paket = json.dumps({"tip": "USER_LIST", "users": user_list_data})
+    for user in online_users.values():
         try:
-            # Mesajı gönderirken de JSON kullanıyoruz ki client ne olduğunu anlasın
-            paket = json.dumps({"sender": sender_name, "msg": message})
-            user_info["socket"].send(paket.encode('utf-8'))
+            user["socket"].send(paket.encode('utf-8'))
         except:
             pass
 
+
 def handle_client(client_socket, client_address):
-    print(f"[BAĞLANTI] {client_address} bağlandı. İstek bekleniyor...")
+    # print(f"[BAĞLANTI] {client_address} bağlandı.")
+    # Terminali kirletmemesi için bu printi kapattım, işlem odaklı olsun.
     user_name = None
-    
     try:
         while True:
-            # İstemciden JSON formatında gelen veriyi oku
-            msg_raw = client_socket.recv(4096).decode('utf-8')
-            if not msg_raw:
+            try:
+                msg_raw = client_socket.recv(10240000).decode('utf-8')
+            except UnicodeDecodeError:
                 break
-            
-            request = json.loads(msg_raw)
+            if not msg_raw: break
+            try:
+                request = json.loads(msg_raw)
+            except json.JSONDecodeError:
+                continue
+
             tip = request.get("tip")
 
-            # --- GÖREV 3: KAYIT VE STEGANOGRAFİ ENTEGRASYONU ---
+            # --- KAYIT İŞLEMİ (STEGANOGRAFİ GÖSTERİSİ) ---
             if tip == "REGISTER":
-                user_name = request["isim"]
-                file_size = request["boyut"]
-                
-                # Dosya alımı için onay gönder
-                client_socket.send(json.dumps({"durum": "READY"}).encode('utf-8'))
-                
-                # Resim verisini al
-                received_data = b""
-                while len(received_data) < file_size:
-                    chunk = client_socket.recv(4096)
-                    if not chunk: break
-                    received_data += chunk
-                
-                # Resmi kaydet ve anahtarı çıkar
-                if not os.path.exists("gelen_resimler"):
-                    os.makedirs("gelen_resimler")
-                
-                save_path = f"gelen_resimler/{user_name}.png"
+                isim = request["isim"]
+                resim_base64 = request["resim_data"]
+
+                print_header(f"YENİ KAYIT İSTEĞİ: {isim}")
+                print_step("VERİ ALINDI", "İstemciden resim verisi (Base64) alındı.")
+
+                db = load_db()
+                if isim in db:
+                    print_step("HATA", "Kullanıcı zaten var, reddediliyor.")
+                    client_socket.send(json.dumps({"durum": "REG_FAIL", "msg": "Kullanici zaten var"}).encode('utf-8'))
+                    continue
+
+                if not os.path.exists("gelen_resimler"): os.makedirs("gelen_resimler")
+                save_path = f"gelen_resimler/{isim}.png"
                 with open(save_path, "wb") as f:
-                    f.write(received_data)
-                
-                # Steganografi ile şifreyi (anahtarı) çıkartıyoruz
-                extracted_key = steg.decode(save_path)
-                
-                if extracted_key:
-                    users[user_name] = {
-                        "socket": client_socket,""
-                        "key": extracted_key,
-                        "status": "online",
-                        "mailbox": [] # Çevrimdışı mesaj deposu
-                    }
-                    print(f"[KAYIT BAŞARILI] {user_name} anahtarı: {extracted_key}")
-                    client_socket.send(json.dumps({"durum": "REG_SUCCESS"}).encode('utf-8'))
-                else:
+                    f.write(base64.b64decode(resim_base64))
+
+                print_step("DOSYA", f"Resim kaydedildi: {save_path}")
+                print_step("STEGANOGRAFİ", "Resim pikselleri taranıyor...")
+
+                try:
+                    # HOCA GÖRSÜN DİYE BURAYA DETAY EKLEDİK
+                    extracted_key = steg.decode(save_path)
+
+                    if extracted_key:
+                        final_key = extracted_key.ljust(8)[:8]
+
+                        print_crypto("GİZLİ VERİ BULUNDU", extracted_key)
+                        print_crypto("DES İÇİN FORMATLANDI", final_key)
+
+                        db[isim] = final_key
+                        save_db(db)
+                        print_step("BAŞARILI", f"{isim} veritabanına eklendi.")
+                        client_socket.send(json.dumps({"durum": "REG_SUCCESS"}).encode('utf-8'))
+                        broadcast_user_list()
+                    else:
+                        print_step("HATA", "Resim içinde gizli veri bulunamadı!")
+                        client_socket.send(json.dumps({"durum": "REG_FAIL", "msg": "Sifre okunamadi"}).encode('utf-8'))
+                except Exception as e:
+                    print(f"Hata detayı: {e}")
                     client_socket.send(json.dumps({"durum": "REG_FAIL"}).encode('utf-8'))
 
-            # --- GÖREV 4: ŞİFRELEMELİ MESAJ YÖNLENDİRME (ROUTING) ---
+            # --- GİRİŞ İŞLEMİ ---
+            elif tip == "GIRIS":
+                isim = request["isim"]
+                sifre = request["sifre"].ljust(8)[:8]
+                db = load_db()
+
+                if isim in db and db[isim] == sifre:
+                    user_name = isim
+                    online_users[isim] = {"socket": client_socket, "key": sifre}
+                    print(f"\n[GİRİŞ] {isim} sisteme bağlandı. (Online)")
+                    client_socket.send(json.dumps({"durum": "LOGIN_SUCCESS"}).encode('utf-8'))
+                    broadcast_user_list()
+
+                    # Offline Mesaj Teslimatı
+                    off_msgs = load_offline_msgs()
+                    if isim in off_msgs:
+                        messages = off_msgs[isim]
+                        print_header(f"OFFLINE MESAJLAR TESLİM EDİLİYOR: {isim}")
+                        print_step("KUYRUK", f"{len(messages)} adet birikmiş mesaj var.")
+                        for msg_pkt in messages:
+                            try:
+                                client_socket.send(json.dumps(msg_pkt).encode('utf-8'))
+                                time.sleep(0.1)
+                            except:
+                                pass
+                        del off_msgs[isim]
+                        save_offline_msgs(off_msgs)
+                        print_step("TAMAMLANDI", "Tüm geçmiş mesajlar iletildi.")
+                else:
+                    print(f"\n[BAŞARISIZ GİRİŞ] {isim} hatalı şifre denedi.")
+                    client_socket.send(
+                        json.dumps({"durum": "LOGIN_FAIL", "msg": "Hatali kullanici/sifre"}).encode('utf-8'))
+
+            # --- MESAJLAŞMA (DES ŞİFRELEME GÖSTERİSİ) ---
             elif tip == "MESAJ":
-                sender = request["gonderen"]
+                sender = request.get("gonderen", user_name)
                 target = request["alici"]
                 encrypted_content = request["mesaj"]
-                
-                if target in users:
-                    # 1. Gönderenin anahtarıyla deşifre et (Sunucu mesajı okur)
-                    cipher_sender = DESCipher(users[sender]["key"])
-                    plain_text = cipher_sender.decrypt(encrypted_content)
-                    
-                    # 2. Alıcının anahtarıyla tekrar şifrele
-                    cipher_target = DESCipher(users[target]["key"])
-                    re_encrypted_msg = cipher_target.encrypt(plain_text)
-                    
-                    paket = json.dumps({
-                        "tip": "YENI_MESAJ",
-                        "gonderen": sender,
-                        "mesaj": re_encrypted_msg.decode('utf-8')
-                    })
-                    
-                    # Alıcı online ise hemen gönder, değilse kutusuna at
-                    if users[target].get("status") == "online":
-                        users[target]["socket"].send(paket.encode('utf-8'))
-                    else:
-                        users[target]["mailbox"].append(paket)
-                else:
-                    client_socket.send(json.dumps({"durum": "HATA", "msg": "Alici bulunamadi"}).encode('utf-8'))
 
+                print_header(f"MESAJ TRAFİĞİ: {sender} -> {target}")
+                print_crypto("GELEN ŞİFRELİ PAKET (C1)", encrypted_content[:30] + "...")  # Uzunsa kes
+
+                db = load_db()
+
+                if sender in db and target in db:
+                    try:
+                        # 1. ADIM: Gönderenin anahtarıyla ÇÖZ
+                        sender_key = db[sender]
+                        cipher_sender = DESCipher(sender_key)
+                        plain_text = cipher_sender.decrypt(encrypted_content)
+
+                        print_step("DECRYPTION", f"Gönderen ({sender}) anahtarı ile çözüldü.")
+                        print(f"    [AÇIK METİN (SUNUCUDA)]: {plain_text}")  # Hoca burayı görsün
+
+                        # 2. ADIM: Alıcının anahtarıyla ŞİFRELE
+                        target_key = db[target]
+                        cipher_target = DESCipher(target_key)
+                        re_encrypted_msg = cipher_target.encrypt(plain_text)
+
+                        print_step("ENCRYPTION", f"Alıcı ({target}) anahtarı ile tekrar şifrelendi.")
+                        print_crypto("GİDEN ŞİFRELİ PAKET (C2)", re_encrypted_msg.decode('utf-8')[:30] + "...")
+
+                        paket_out = {
+                            "tip": "YENI_MESAJ",
+                            "gonderen": sender,
+                            "mesaj": re_encrypted_msg.decode('utf-8')
+                        }
+
+                        if target in online_users:
+                            online_users[target]["socket"].send(json.dumps(paket_out).encode('utf-8'))
+                            print_step("İLETİM", "Alıcı ONLINE -> Mesaj anında iletildi.")
+                        else:
+                            print_step("İLETİM", "Alıcı OFFLINE -> Mesaj veritabanına/dosyaya kaydedildi.")
+                            off_msgs = load_offline_msgs()
+                            if target not in off_msgs: off_msgs[target] = []
+                            off_msgs[target].append(paket_out)
+                            save_offline_msgs(off_msgs)
+
+                    except Exception as e:
+                        print(f"!!! KRİPTOGRAFİ HATASI: {e}")
+                else:
+                    print("!!! HATA: Kullanıcılar veritabanında bulunamadı.")
     except Exception as e:
-        print(f"[HATA] {client_address} - {e}")
-    
-    # Bağlantı koptuğunda temizlik yap
-    if user_name and user_name in users:
-        users[user_name]["status"] = "offline"
+        pass
+    if user_name and user_name in online_users:
+        del online_users[user_name]
         print(f"[ÇIKIŞ] {user_name} çevrimdışı.")
+        broadcast_user_list()
     client_socket.close()
+
 
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((HOST, PORT))
     server.listen()
-    print(f"[DİNLİYOR] Sunucu {HOST}:{PORT} açık...")
-
+    print("\n" + "*" * 50)
+    print(f" GÜVENLİ MESAJLAŞMA SUNUCUSU BAŞLATILDI: {HOST}:{PORT}")
+    print("*" * 50 + "\n")
     try:
         while True:
-            client_socket, client_address = server.accept()
-            thread = threading.Thread(target=handle_client, args=(client_socket, client_address))
-            thread.start()
-    except KeyboardInterrupt:
-        print("\n[KAPANIYOR] Sunucu kapatılıyor...")
+            client, addr = server.accept()
+            threading.Thread(target=handle_client, args=(client, addr)).start()
+    except:
         server.close()
+
 
 if __name__ == "__main__":
     start_server()
