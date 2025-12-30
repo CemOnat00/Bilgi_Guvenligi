@@ -1,65 +1,178 @@
 import sys
 import warnings
 import datetime
-# Kendi dosyalarim
+import os
 import client
 import dess
+import json
+import threading
+from PyQt5 import QtCore
+from PyQt5 import uic, QtWidgets
+from PyQt5.QtWidgets import QApplication, QDialog, QWidget, QListWidgetItem
+from PyQt5.QtGui import QColor, QBrush
+from PyQt5.uic import loadUi
 
 # Gereksiz uyarilari kapat
 warnings.filterwarnings("ignore")
 
-from PyQt5 import uic, QtWidgets
-from PyQt5.QtWidgets import QApplication, QDialog, QWidget
-from PyQt5.uic import loadUi
+oyun_client = client.GameClient()
+
+
+# --- GEÇMİŞ YÖNETİMİ ---
+def save_message_to_history(my_username, other_user, sender_name, message_content):
+    """
+    my_username: Kimin geçmiş dosyasına yazılacak (Ben)
+    other_user: Sohbet ettiğim kişi (Ahmet)
+    sender_name: Mesajı kim attı? (Ben mi Ahmet mi?)
+    message_content: Mesaj metni
+    """
+    filename = f"history_{my_username}.json"
+    data = {}
+
+    # Dosya varsa yükle
+    if os.path.exists(filename):
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except:
+            pass
+
+    # Sohbet partneri için liste yoksa oluştur
+    if other_user not in data:
+        data[other_user] = []
+
+    # Mesajı ekle (Zaman damgasıyla)
+    timestamp = datetime.datetime.now().strftime("%H:%M")
+    entry = {"sender": sender_name, "msg": message_content, "time": timestamp}
+    data[other_user].append(entry)
+
+    # Kaydet
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+
+def load_history(my_username, other_user):
+    filename = f"history_{my_username}.json"
+    if not os.path.exists(filename): return []
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data.get(other_user, [])
+    except:
+        return []
 
 
 # -------------------------
 # SOHBET EKRANI
 # -------------------------
+class DinlemeThread(QtCore.QThread):
+    yeni_mesaj = QtCore.pyqtSignal(str, str)
+    liste_guncelle = QtCore.pyqtSignal(list)
+
+    def run(self):
+        oyun_client.dinle(self.mesaj_sinyali, self.liste_sinyali)
+
+    def mesaj_sinyali(self, gonderen, mesaj):
+        self.yeni_mesaj.emit(gonderen, mesaj)
+
+    def liste_sinyali(self, users):
+        self.liste_guncelle.emit(users)
+
+
 class ChatScreen(QWidget):
     def __init__(self):
-        super().__init__()  # Modern kullanim
+        super().__init__()
         loadUi("untitled.ui", self)
+        self.setWindowTitle(f"Mesajlasma - {oyun_client.username}")
+        self.secilen_kisi = None
 
-        self.setWindowTitle("Mesajlasma")
-
-        # Butonlari bagla
         self.sendButton.clicked.connect(self.mesajGonder)
         self.messageInput.returnPressed.connect(self.mesajGonder)
         self.userList.itemClicked.connect(self.kisiSecildi)
 
-        # Listeyi doldur (Test verileri)
-        self.logEkle("Sisteme baglandiniz...")
-        self.userList.addItem("Ahmet")
-        self.userList.addItem("Mehmet")
-        self.userList.addItem("Ayse")
+        from dess import DESCipher
+        if not oyun_client.des_cipher:
+            oyun_client.des_cipher = DESCipher("12345678")
+
+        self.thread = DinlemeThread()
+        self.thread.yeni_mesaj.connect(self.mesajGeldi)
+        self.thread.liste_guncelle.connect(self.listeyiYenile)
+        self.thread.start()
 
     def kisiSecildi(self, item):
-        secilen = item.text()
-        # Basligi guncelle html ile
+        # item.text() şöyle gelebilir: "Ahmet (Online)"
+        # Biz sadece ismi almalıyız.
+        raw_text = item.text()
+        secilen = raw_text.split(" ")[0]  # İlk kelimeyi al (isim)
+
+        self.secilen_kisi = secilen
         self.chatTitle.setText(
             f"<html><head/><body><p><span style='font-size:14pt; font-weight:600;'>Sohbet: {secilen}</span></p></body></html>")
-        print("Secilen kisi:", secilen)  # debug
+
+        # --- GEÇMİŞİ YÜKLE ---
+        self.chatArea.clear()
+        gecmis = load_history(oyun_client.username, secilen)
+        for not_item in gecmis:
+            kim = not_item["sender"]
+            msg = not_item["msg"]
+            zaman = not_item["time"]
+
+            if kim == oyun_client.username:
+                self.chatArea.append(
+                    f"<span style='color: #4CAF50; font-weight: bold;'>Ben ({zaman}):</span> <span style='color: white;'>{msg}</span>")
+            else:
+                self.chatArea.append(f"<b style='color:orange'>{kim} ({zaman}):</b> {msg}")
 
     def mesajGonder(self):
         mesaj = self.messageInput.text()
-
         if mesaj != "":
+            if not self.secilen_kisi:
+                self.logEkle("Lutfen listeden bir kullanici secin!")
+                return
+
             saat = datetime.datetime.now().strftime("%H:%M")
-
-            # Html formatinda renkli yazi
             yazi = f"<span style='color: #4CAF50; font-weight: bold;'>Ben ({saat}):</span> <span style='color: white;'>{mesaj}</span>"
-
             self.chatArea.append(yazi)
             self.messageInput.clear()
 
-            # Client gonderme islemi burada yapilacak
-            print("Giden mesaj:", mesaj)
+            # Server'a yolla
+            oyun_client.mesaj_yolla(self.secilen_kisi, mesaj)
+
+            # --- GEÇMİŞE KAYDET ---
+            save_message_to_history(oyun_client.username, self.secilen_kisi, oyun_client.username, mesaj)
         else:
             print("Bos mesaj gonderilemez")
 
     def logEkle(self, text):
         self.chatArea.append(f"<span style='color: gray;'>{text}</span>")
+
+    def mesajGeldi(self, gonderen, mesaj):
+        # Eğer şu an o kişiyle konuşuyorsak ekrana bas
+        if self.secilen_kisi == gonderen:
+            saat = datetime.datetime.now().strftime("%H:%M")
+            self.chatArea.append(f"<b style='color:orange'>{gonderen} ({saat}):</b> {mesaj}")
+
+        # Her halükarda geçmişe kaydet
+        save_message_to_history(oyun_client.username, gonderen, gonderen, mesaj)
+
+    def listeyiYenile(self, users_data):
+        # users_data artık şöyle geliyor: [{"username": "ali", "status": "Online"}, ...]
+        self.userList.clear()
+        for user_obj in users_data:
+            u_name = user_obj["username"]
+            status = user_obj["status"]
+
+            if u_name != oyun_client.username:
+                display_text = f"{u_name} ({status})"
+                item = QListWidgetItem(display_text)
+
+                # Renklendirme
+                if status == "Online":
+                    item.setForeground(QColor("lightgreen"))  # Yeşil
+                else:
+                    item.setForeground(QColor("gray"))  # Gri/Kırmızımsı
+
+                self.userList.addItem(item)
 
 
 # -------------------------
@@ -70,34 +183,34 @@ class Login(QDialog):
         super().__init__()
         loadUi("Login.ui", self)
         self.setWindowTitle("Giris")
-
-        # UI baglantilari
         self.loginb.clicked.connect(self.girisYap)
-        self.password.setEchoMode(QtWidgets.QLineEdit.Password)
         self.registera.clicked.connect(self.kayitEkraninaGit)
+        self.password.setEchoMode(QtWidgets.QLineEdit.Password)
 
     def girisYap(self):
         kadi = self.username.text()
         sifre = self.password.text()
+        anahtar_hazirligi = sifre.ljust(8)[:8]
 
-        # print(kadi, sifre) # kontrol amacli
-        print("Giris yapiliyor:", kadi)
-
-        # Simdilik sifre kontrolu yok direk geciyoruz
         if kadi and sifre:
-            print("Giris basarili, sohbet aciliyor")
+            basarili = oyun_client.giris_yap(kadi, sifre)
+            if basarili:
+                from dess import DESCipher
+                oyun_client.des_cipher = DESCipher(anahtar_hazirligi)
 
-            chat = ChatScreen()
-            widget.addWidget(chat)
-            widget.setCurrentIndex(widget.currentIndex() + 1)
+                chat = ChatScreen()
+                widget.addWidget(chat)
+                # Düzeltilmiş geçiş
+                widget.setCurrentWidget(chat)
+            else:
+                print("Sunucuya bağlanılamadı!")
         else:
-            print("Kullanici adi sifre bos olamaz!")
+            print("Alanlar boş olamaz")
 
     def kayitEkraninaGit(self):
-        print("Kayit ekranina gidiliyor...")
         kayit = CreateAcc()
         widget.addWidget(kayit)
-        widget.setCurrentIndex(widget.currentIndex() + 1)
+        widget.setCurrentWidget(kayit)  # Düzeltilmiş geçiş
 
 
 # -------------------------
@@ -107,53 +220,43 @@ class CreateAcc(QDialog):
     def __init__(self):
         super().__init__()
         loadUi("creation.ui", self)
-
         self.registera_2.clicked.connect(self.kayitOl)
         self.password.setEchoMode(QtWidgets.QLineEdit.Password)
         self.confirmp.setEchoMode(QtWidgets.QLineEdit.Password)
-
         self.resimYolu = ""
         self.photobtn.clicked.connect(self.fotoSec)
 
     def fotoSec(self):
-        print("Foto sec butonuna basildi")
-        dosya, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Resim Sec", "", "Resimler (*.png *.jpg *.bmp)")
+        dosya, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Resim Sec", "", "Resimler (*.png);;Tum Dosyalar (*.*)")
         if dosya:
             self.resimYolu = dosya
-            print("Secilen dosya:", self.resimYolu)
+            self.photobtn.setText(os.path.basename(dosya))
 
     def kayitOl(self):
         kadi = self.username.text()
         sifre = self.password.text()
         sifre_tekrar = self.confirmp.text()
 
-        if sifre != sifre_tekrar:
-            print("Sifreler ayni degil!")
-            return
+        if sifre != sifre_tekrar: return
+        if self.resimYolu == "": return
 
-        if self.resimYolu == "":
-            print("Resim secmediniz!")
-            return
-        print("Kayit islemi basladi...", kadi)
         try:
-            # Client dosyasindaki fonksiyonu cagiriyoruz
-            client.register_user(kadi, sifre, self.resimYolu)
-            print("Kayit istegi yollandi, girise donuluyor")
-            widget.setCurrentIndex(0)  # Giris ekranina don
+            sonuc = oyun_client.register(kadi, sifre, self.resimYolu)
+            if sonuc == "KAYIT_OK":
+                widget.setCurrentIndex(0)
+            else:
+                print("Kayıt hatası:", sonuc)
         except Exception as hata:
-            print("Hata cikti:", hata)
-
+            print("Hata:", hata)
 
 # -------------------------
 # MAIN
 # -------------------------
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    # Ekran yonetimi
     widget = QtWidgets.QStackedWidget()
     giris_ekrani = Login()
     widget.addWidget(giris_ekrani)
-    # Boyut ayarlari
     widget.setFixedWidth(1100)
     widget.setFixedHeight(650)
     widget.setWindowTitle("Guvenli Mesajlasma")
