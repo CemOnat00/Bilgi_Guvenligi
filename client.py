@@ -1,43 +1,109 @@
 import socket
 import os
+import json
 import steg
+import time
+import base64
 
 HOST = '127.0.0.1'
-PORT = 5555
-def register_user(username, password, image_path):
-    resimciktisi = f"encoded_{username}.png"
-    basari = steg.encode(image_path, password, resimciktisi)
-    if not basari:
-        print("Resim oluşturma hatası")
-        return
-    filesize = os.path.getsize(resimciktisi)
-    try:
-        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client.connect((HOST, PORT))
-        header = f"REGISTER|{username}|{filesize}"
-        client.send(header.encode('utf-8'))
-        response = client.recv(1024).decode('utf-8')
-        if response == "READY":
-            print("Sunucu hazır, gönderiliyor...")
+PORT = 12345
+
+
+class GameClient:
+    def __init__(self):
+        self.client_socket = None
+        self.username = None
+        self.connected = False
+        self.des_cipher = None
+
+    def baglan(self):
+        try:
+            self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.client_socket.connect((HOST, PORT))
+            self.connected = True
+            return True
+        except Exception as e:
+            print(f"Bağlantı hatası: {e}")
+            return False
+
+    def register(self, username, password, image_path):
+        password_padded = password.ljust(8)[:8]
+        resimciktisi = f"encoded_{username}.png"
+        basari = steg.encode(image_path, password_padded, resimciktisi)
+        if not basari: return "Resim oluşturulamadı"
+
+        if not self.connected:
+            if not self.baglan(): return "Bağlantı yok"
+
+        try:
             with open(resimciktisi, "rb") as f:
-                while True:
-                    bytes_read = f.read(4096)
-                    if not bytes_read:
-                        break
-                    client.sendall(bytes_read)
-            final_response = client.recv(1024).decode('utf-8')
-            if final_response == "REG_SUCCESS":
-                print("Kayıt Başarılı")
+                img_data = f.read()
+            img_str = base64.b64encode(img_data).decode('utf-8')
+
+            paket = {"tip": "REGISTER", "isim": username, "resim_data": img_str}
+            self.client_socket.send(json.dumps(paket).encode('utf-8'))
+
+            cevap = json.loads(self.client_socket.recv(1024).decode('utf-8'))
+            if cevap.get("durum") == "REG_SUCCESS":
+                self.client_socket.close()
+                self.connected = False
+                return "KAYIT_OK"
             else:
-                print("Kayıt Başarısız")
-        client.close()
-    except Exception as e:
-        print(f"Hata: {e}")
-if __name__ == "__main__":
-    u_name = input("Kullanıcı Adı: ")
-    passw = input("Şifre: ")
-    img_p = "test.jpg"
-    if os.path.exists(img_p):
-        register_user(u_name, passw, img_p)
-    else:
-        print("test.jpg bulunamadı")
+                return cevap.get("msg", "Kayit Basarisiz")
+        except Exception as e:
+            self.client_socket.close()
+            self.connected = False
+            return f"Hata: {e}"
+
+    def giris_yap(self, username, password):
+        if not self.connected:
+            if not self.baglan(): return False
+        self.username = username
+        password_padded = password.ljust(8)[:8]
+        try:
+            paket = {"tip": "GIRIS", "isim": username, "sifre": password_padded}
+            self.client_socket.send(json.dumps(paket).encode('utf-8'))
+            cevap_raw = self.client_socket.recv(1024).decode('utf-8')
+            cevap = json.loads(cevap_raw)
+            if cevap.get("durum") == "LOGIN_SUCCESS":
+                return True
+            else:
+                print("Giriş Başarısız:", cevap.get("msg"))
+                return False
+        except Exception as e:
+            print("Giriş Hatası:", e)
+            return False
+
+    def mesaj_yolla(self, alici, mesaj):
+        if self.des_cipher:
+            try:
+                sifreli = self.des_cipher.encrypt(mesaj).decode('utf-8')
+                # --- DÜZELTME BURADA: 'gonderen' bilgisi eklendi ---
+                paket = {
+                    "tip": "MESAJ",
+                    "alici": alici,
+                    "mesaj": sifreli,
+                    "gonderen": self.username
+                }
+                self.client_socket.send(json.dumps(paket).encode('utf-8'))
+            except Exception as e:
+                print(f"Mesaj gönderme hatası: {e}")
+
+    def dinle(self, mesaj_geldi_callback, liste_geldi_callback):
+        while self.connected:
+            try:
+                veri = self.client_socket.recv(1024000).decode('utf-8')
+                if not veri: break
+                try:
+                    paket = json.loads(veri)
+                except:
+                    continue
+
+                if paket["tip"] == "USER_LIST":
+                    liste_geldi_callback(paket["users"])
+                elif paket["tip"] == "YENI_MESAJ":
+                    if self.des_cipher:
+                        cozulmus = self.des_cipher.decrypt(paket["mesaj"])
+                        mesaj_geldi_callback(paket["gonderen"], cozulmus)
+            except:
+                break
