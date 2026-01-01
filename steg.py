@@ -26,7 +26,6 @@ def resize(img,max_size=800):
     new_height=int(height*oran)
     new_width=int(width*oran)
     return cv2.resize(img,(new_width,new_height),interpolation=cv2.INTER_AREA)
-
 def encode(img_path,secret_data,output_path):
     img=cv2.imread(img_path)
     if(img is None):
@@ -63,9 +62,7 @@ def encode(img_path,secret_data,output_path):
     cv2.imwrite(output_path,img_encoded)
     print("Gizli veri başarıyla gizlendi ve kaydedildi:",output_path)
     return True
-
 def decode(img_path):
-
     img = cv2.imread(img_path)
     if img is None:
         print("Resim yüklenemedi")
@@ -84,9 +81,6 @@ def decode(img_path):
             binary_data = ""
             if secret_data.endswith("$$$"):
                 return secret_data[:-3]
-
-
-
 #Binarye çevirme hazır
 #gönderieln resmi sınırlayacağız
 #ALTTAKİ RESİM KISMINDA SUNUCUDA VE CLİENTTA AYNI İSİM OLMASIN DİYE İSİMLERİ eşsiz yapmak lazım
