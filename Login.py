@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import QApplication, QDialog, QWidget, QListWidgetItem
 from PyQt5.QtGui import QColor, QBrush
 from PyQt5.uic import loadUi
 
-# Gereksiz uyarilari kapat
+
 warnings.filterwarnings("ignore")
 
 oyun_client = client.GameClient()
@@ -265,3 +265,4 @@ if __name__ == "__main__":
         sys.exit(app.exec_())
     except:
         print("Cikis yapildi")
+
