@@ -109,7 +109,7 @@ def handle_client(client_socket, client_address):
                     print(f"\n[GİRİŞ] {isim} sisteme bağlandı. (Online)")
                     client_socket.send(json.dumps({"durum": "LOGIN_SUCCESS"}).encode('utf-8'))
                     broadcast_user_list()
-                    # Offline mesajlarr
+                    # Offline mesajlar
                     off_msgs = load_offline_msgs()
                     if isim in off_msgs:
                         messages = off_msgs[isim]
