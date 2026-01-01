@@ -50,9 +50,7 @@ def broadcast_user_list():
             user["socket"].send(paket.encode('utf-8'))
         except:
             pass
-def handle_client(client_socket, client_address):
-    # print(f"[BAĞLANTI] {client_address} bağlandı.")
-    # Terminali kirletmemesi için bu printi kapattım, işlem odaklı olsun.
+def handle_client(client_socket, client_address):   
     user_name = None
     try:
         while True:
@@ -66,7 +64,7 @@ def handle_client(client_socket, client_address):
             except json.JSONDecodeError:
                 continue
             tip = request.get("tip")
-            #Kayıt islemi
+            #Kayıt işlemi
             if tip == "REGISTER":
                 isim = request["isim"]
                 resim_base64 = request["resim_data"]
@@ -100,7 +98,7 @@ def handle_client(client_socket, client_address):
                 except Exception as e:
                     print(f"Hata detayı: {e}")
                     client_socket.send(json.dumps({"durum": "REG_FAIL"}).encode('utf-8'))
-            #Giris
+            #Giriş
             elif tip == "GIRIS":
                 isim = request["isim"]
                 sifre = request["sifre"].ljust(8)[:8]
@@ -130,7 +128,7 @@ def handle_client(client_socket, client_address):
                     print(f"\n[BAŞARISIZ GİRİŞ] {isim} hatalı şifre denedi.")
                     client_socket.send(
                         json.dumps({"durum": "LOGIN_FAIL", "msg": "Hatali kullanici/sifre"}).encode('utf-8'))
-            #Des sifreleme islemi hocalara yardım
+            #Des sifreleme işlemi konosolda tamamen gözüksün
             elif tip == "MESAJ":
                 sender = request.get("gonderen", user_name)
                 target = request["alici"]
@@ -146,7 +144,7 @@ def handle_client(client_socket, client_address):
                         plain_text = cipher_sender.decrypt(encrypted_content)
                         print_step("DECRYPTION", f"Gönderen ({sender}) anahtarı ile çözüldü.")
                         print(f"    [AÇIK METİN (SUNUCUDA)]: {plain_text}")
-                        # Yeniden şifreleyeceğiz
+                        # Yeniden şifreleme
                         target_key = db[target]
                         cipher_target = DESCipher(target_key)
                         re_encrypted_msg = cipher_target.encrypt(plain_text)
